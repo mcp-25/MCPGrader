@@ -1,6 +1,6 @@
 from dataclasses_json import dataclass_json
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import List, Optional, Any
 import hashlib
 import os
 from os import path
@@ -49,7 +49,7 @@ class AssignmentConfig:
 @dataclass_json
 @dataclass
 class SlurmBackendConfig:
-    config: dict[str, any] = None
+    config: dict[str, Any] = None
 
     def assert_valid(self) -> None:
         assert isinstance(self.config, dict), "config must be a dictionary"
