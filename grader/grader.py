@@ -1,5 +1,6 @@
 from collections import defaultdict
 import json
+from typing import Iterable
 from config import ProgramConfig, AssignmentConfig, AssignmentTaskConfig
 from git import Repo, Git
 from gh import GithubClassroomAPI
@@ -86,7 +87,7 @@ class Grader:
         with open(cache_file_path, 'w') as cache_file:
             json.dump(cache, cache_file, indent=4)
 
-    def _filter_updated_submissions(self, task: AssignmentTaskConfig, submissions: list[SubmissionInfo]) -> list[SubmissionInfo]:
+    def _filter_updated_submissions(self, task: AssignmentTaskConfig, submissions: Iterable[SubmissionInfo]) -> list[SubmissionInfo]:
         cache = self._open_cache_file(task)
         updated_submissions = []
     
@@ -100,7 +101,7 @@ class Grader:
 
         return updated_submissions
 
-    def _grade_task(self, task: AssignmentTaskConfig, submissions: list[SubmissionInfo]) -> list[dict]:
+    def _grade_task(self, task: AssignmentTaskConfig, submissions: Iterable[SubmissionInfo]) -> list[dict]:
         task_id = int(os.environ.get('SLURM_PROCID', 0))
         data = []
 
@@ -108,6 +109,8 @@ class Grader:
             return []
 
         logger = build_logger(name=f"grader.task.{task.name}", level=self.log.level)
+
+        submissions = filter(lambda x: x.commit_count > 0, submissions)
 
         for submission in self._filter_updated_submissions(task, submissions):
             res = self._grade_submission(submission, task, logger)
