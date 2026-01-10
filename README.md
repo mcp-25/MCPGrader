@@ -76,29 +76,47 @@ grader:
 
 ### Step 3: Configure Assignments
 
-Add assignments to the `assignments` list:
+Add assignments to the `assignments` list. Each assignment can have multiple tasks that run different test scripts with different configurations:
 
 ```yaml
 assignments:
   - name: "vector-sum"
     invite_link: "https://classroom.github.com/a/example1"
-    skip: false
     preserve_repo_files: false
-    blocking: true
-    test_script_path: "./test_scripts/test_vectorsum.sh"
-    
-    slurm_backend:
-      config:
-        slurm_partition: "short"
-        timeout_min: 60
-        mem_gb: 4
-        nodes: 1
-        tasks_per_node: 1
-        cpus_per_task: 2
-        gpus_per_node: 0
+
+    tasks:
+      - name: "test-cpu"
+        skip: false
+        blocking: true
+        test_script_path: "./test_scripts/test_vectorsum_cpu.sh"
+
+        slurm_backend:
+          config:
+            slurm_partition: "short"
+            timeout_min: 60
+            mem_gb: 4
+            nodes: 1
+            tasks_per_node: 1
+            cpus_per_task: 2
+            gpus_per_node: 0
+            
+      - name: "test-gpu"
+        skip: false
+        blocking: true
+        test_script_path: "./test_scripts/test_vectorsum_gpu.sh"
+        
+        slurm_backend:
+          config:
+            slurm_partition: "gpu"
+            timeout_min: 60
+            mem_gb: 8
+            nodes: 1
+            tasks_per_node: 1
+            cpus_per_task: 4
+            gpus_per_node: 1
 ```
 
-**Field Explanations:**
+**Assignment-Level Field Explanations:**
 
 - **`name`** (required): A unique identifier for the assignment. Used as the key in the output JSON.
 
@@ -109,17 +127,23 @@ assignments:
   
   Note: You only need to provide **one** of these three identifiers.
 
-- **`skip`** (default: `false`): If `true`, this assignment will be skipped during grading.
-
 - **`preserve_repo_files`** (default: `false`): If `true`, cloned repositories will not be deleted after grading. Useful for debugging.
 
-- **`blocking`** (default: `false`): If `true`, the grader will wait for this assignment's grading to complete before proceeding to the next assignment. Useful for sequential processing or when assignments have dependencies.
+- **`tasks`** (required): A list of tasks to run for this assignment. Each task represents a different test or evaluation.
 
-- **`test_script_path`** (required): Absolute or relative path to the test script that will be executed in each student's repository.
+**Task-Level Field Explanations:**
 
-### Step 4: Configure SLURM Backend
+- **`name`** (required): A unique identifier for the task within the assignment. Used to identify the task in logs and output.
 
-The `slurm_backend.config` section accepts parameters that are passed directly to **submitit**, which manages SLURM job submissions.
+- **`skip`** (default: `false`): If `true`, this task will be skipped during grading.
+
+- **`blocking`** (default: `false`): If `true`, the grader will wait for this task's execution to complete before proceeding to the next task. Useful for sequential processing or when tasks have dependencies.
+
+- **`test_script_path`** (required): Absolute or relative path to the test script that will be executed in each student's repository for this task.
+
+### Step 4: Configure SLURM Backend for Tasks
+
+The `slurm_backend.config` section within each task accepts parameters that are passed directly to **submitit**, which manages SLURM job submissions. Each task can have different SLURM resource requirements.
 
 ```yaml
 slurm_backend:

@@ -1,7 +1,7 @@
 from collections import defaultdict
 import json
 from config import ProgramConfig, AssignmentConfig, AssignmentTaskConfig
-from git import Repo
+from git import Repo, Git
 from gh import GithubClassroomAPI
 from gh.filters import By
 from gh.exceptions import GitHubException
@@ -14,39 +14,9 @@ from logging import Logger
 from runners import *
 from shutil import copyfile
 import subprocess
-from dataclasses import dataclass
+from .structs import GradeResult
 from logger import build_logger
 import os
-
-@dataclass
-class GradeResult:
-    name: str
-    commit_hash: str
-    _status: str
-    error: str
-    stdout: str
-    runtimes: list[float]
-    data: dict
-
-    def to_dict(self) -> dict:
-        return {
-            "name": self.name,
-            "commit_hash": self.commit_hash,
-            "status": self.status,
-            "error": self.error,
-            "stdout": self.stdout,
-            "avg_runtime": sum(self.runtimes) / len(self.runtimes) if self.runtimes else 0.0,
-            "data": self.data
-        }
-    
-    @property
-    def status(self) -> str:
-        return self._status
-    
-    @status.setter
-    def status(self, value: str) -> None:
-        if self._status != "error":
-            self._status = value
 
 class Grader:
     def __init__(self, config: ProgramConfig, pat: str, logger: Logger) -> None:
@@ -54,12 +24,13 @@ class Grader:
         self.pat = pat
         self.classroom = GithubClassroomAPI(pat)
         self.wd = Path(config.grader.working_dir)
+        self.git = Git(self.wd / ".git")
         self.log = logger
         self.job_ids: list[tuple] = []
         self.runner: ABRunner = self._get_runner()
         self.previous_grades: dict = {}
 
-    def _grade_assignment(self, assignment_cfg: AssignmentConfig) -> None:
+    def _get_assignment(self, assignment_cfg: AssignmentConfig):
         if assignment_cfg.invite_link:
             assignment = self.classroom.get_assignment_by(By.INVITE_LINK, assignment_cfg.invite_link)
         elif assignment_cfg.slug:
@@ -68,9 +39,12 @@ class Grader:
             assignment = self.classroom.get_assignment_by(By.ID, assignment_cfg.id)
         else:
             raise GitHubException("No valid identifier provided for assignment.")
+        
+        return assignment
 
+    def _grade_assignment(self, assignment_cfg: AssignmentConfig) -> None:
+        assignment = self._get_assignment(assignment_cfg)
         submissions = self.classroom.get_submissions_for_assignment(assignment.id)
-
 
         for task in assignment_cfg.tasks:
             blocking = task.blocking
@@ -88,15 +62,52 @@ class Grader:
                 self.log.info("Waiting for blocking task %s[%s] to complete", assignment_cfg.name, task.name)
                 self.runner.wait(job_id)
 
+    def _get_latest_commit_hash(self, submission: SubmissionInfo) -> str:
+        repo_url = submission.repository.html_url.replace("https://", f"https://{self.pat}@")
+        commit_hash = self.git.ls_remote(repo_url, "HEAD").split()[0]
+        return commit_hash
+    
+    def _open_cache_file(self, task: AssignmentTaskConfig) -> dict[str, str]:
+        cache_file_path = self.wd / ".cache" / f"{task.name}_cache.json"
+        if not cache_file_path.exists():
+            mkdir(self.wd / ".cache")
+            with open(cache_file_path, 'w') as cache_file:
+                json.dump({}, cache_file)
+        
+        with open(cache_file_path, 'r') as cache_file:
+            cache: dict[str, str] = json.load(cache_file)
+        
+        return cache
+    
+    def _save_cache_file(self, task: AssignmentTaskConfig, cache: dict[str, str]) -> None:
+        cache_file_path = self.wd / ".cache" / f"{task.name}_cache.json"
+        with open(cache_file_path, 'w') as cache_file:
+            json.dump(cache, cache_file, indent=4)
+
+    def _filter_updated_submissions(self, task: AssignmentTaskConfig, submissions: list[SubmissionInfo]) -> list[SubmissionInfo]:
+        cache = self._open_cache_file(task)
+        updated_submissions = []
+    
+        for submission in submissions:
+            commit_hash = self._get_latest_commit_hash(submission)
+            if cache.get(submission.repository.html_url) != commit_hash:
+                updated_submissions.append(submission)
+            cache[submission.repository.html_url] = commit_hash
+
+        self._save_cache_file(task, cache)
+
+        return updated_submissions
+
     def _grade_task(self, task: AssignmentTaskConfig, submissions: list[SubmissionInfo]) -> list[dict]:
         task_id = int(os.environ.get('SLURM_PROCID', 0))
         data = []
-        logger = build_logger(name=f"grader.task.{task.name}", level=self.log.level)
 
         if task_id != 0:
             return []
 
-        for submission in submissions:
+        logger = build_logger(name=f"grader.task.{task.name}", level=self.log.level)
+
+        for submission in self._filter_updated_submissions(task, submissions):
             res = self._grade_submission(submission, task, logger)
             data.append(res)
 
@@ -114,7 +125,7 @@ class Grader:
         log.debug("Downloading %s", repo_url)
         repo = Repo.clone_from(repo_url, repo_dir)
 
-        commit_hash = repo.head.commit.hexsha[:7]
+        commit_hash = repo.head.commit.hexsha
         log.debug("Cloned repository at commit %s", commit_hash)
 
         result = self._grade_task_submission(task, submission, commit_hash, repo_dir)
@@ -174,7 +185,7 @@ class Grader:
     def _get_result_defaultdict(self) -> dict:
         return defaultdict(
             lambda: defaultdict(
-                lambda: GradeResult("", "", "graded", "", "", [], {})
+                lambda: GradeResult("", "", {}, {}, {}, {}, {})
                 )
             )
                 
@@ -193,14 +204,7 @@ class Grader:
 
             for result in task_results:
                 name = result["name"]
-                data[assignment_cfg.name][name].name = name
-                data[assignment_cfg.name][name].commit_hash = result["commit_hash"]
-                data[assignment_cfg.name][name].status = result["status"]  # This uses the property setter, see the implementation
-                data[assignment_cfg.name][name].error += f"\n\n--- Stderr for task {task.name} ---\n" + result["error"]
-                data[assignment_cfg.name][name].stdout += f"\n\n--- Stdout for task {task.name} ---\n" + result["stdout"]
-                data[assignment_cfg.name][name].runtimes.extend(result["runtimes"])
-                data[assignment_cfg.name][name].data[task.name] = result["data"]
-
+                data[assignment_cfg.name][name].update_from_dict(result, task.name)
             
                 repo_dir = Path(result["repo_dir"])
                 if not assignment_cfg.preserve_repo_files:
@@ -208,8 +212,15 @@ class Grader:
 
         result = existing_data
 
+        # compute the students to keep because they were not re-graded
+        to_add = defaultdict(list)
+
+        for assignment_name, students in existing_data.items():
+            to_add[assignment_name].extend([student for student in students if student["name"] not in data[assignment_name]]) 
+
+        # when updating the data, don't forget to add the non-updated students
         for assignment_name, students in data.items():
-            result[assignment_name] = [student.to_dict() for student in students.values()]
+            result[assignment_name] = [student.to_dict() for student in students.values()] + to_add[assignment_name]
 
         # Cleanup repositories
         for repo_dir in repos_to_cleanup:
