@@ -30,6 +30,9 @@ class Grader:
         self.runner: ABRunner = self._get_runner()
         self.previous_grades: dict = {}
 
+        if not (self.wd / ".cache").exists():
+            mkdir(self.wd / ".cache")
+
     def _get_assignment(self, assignment_cfg: AssignmentConfig):
         if assignment_cfg.invite_link:
             assignment = self.classroom.get_assignment_by(By.INVITE_LINK, assignment_cfg.invite_link)
@@ -70,7 +73,6 @@ class Grader:
     def _open_cache_file(self, task: AssignmentTaskConfig) -> dict[str, str]:
         cache_file_path = self.wd / ".cache" / f"{task.name}_cache.json"
         if not cache_file_path.exists():
-            mkdir(self.wd / ".cache")
             with open(cache_file_path, 'w') as cache_file:
                 json.dump({}, cache_file)
         
