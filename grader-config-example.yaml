@@ -2,6 +2,7 @@ grader:
   working_dir: "/tmp/grader"
   grades_file: "leaderboard.json"
   github_pat: "pat_example_1234567890"
+  sentry_dsn: ""
 
 assignments:
   - name: "vector-sum"

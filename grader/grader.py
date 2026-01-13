@@ -102,6 +102,7 @@ class Grader:
                 updated_submissions.append(submission)
             cache["cache"][submission.repository.html_url] = commit_hash
 
+        # TODO: Fix possible logic bug in which updated submissions are not graded (grader crashes) but the cache is updated anyway
         self._save_cache_file(task, cache)
 
         return updated_submissions
